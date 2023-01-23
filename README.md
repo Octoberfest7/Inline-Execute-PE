@@ -6,13 +6,15 @@
 ## Introduction
 Inline-Execute-PE is a suite of Beacon Object Files (BOF's) and an accompanying Aggressor script for CobaltStrike that enables Operators to load unmanaged Windows executables into Beacon memory and execute them, retrieving the output and rendering it in the Beacon console.
 
-This enables Operators to use many third party tools (mimikatz, dsquery, sysinternals tools, etc) without needing to drop them to disk, reformat them to position independent code using a tool like Donut, or create a new process to run them.
+This enables Operators to use many third party tools (Mimikatz, Dsquery, Sysinternals tools, etc) without needing to drop them to disk, reformat them to position independent code using a tool like Donut, or create a new process to run them.
 
 These executables are mapped into Beacon memory so that they can be ran repeatedly without needing to send them over the network, allocate new memory, and create a new conhost.exe process each time.  
 
 Executables loaded into Beacons are accessible and able to be ran by all CobaltStrike Clients connected to the CobaltStrike Team Server.
 
-Inline-Execute-PE was designed around x64 Beacons and x64 Windows C or C++ executables compiled using mingw or visual studio.  This project does not support x86 executables or x64 executables written in a different language or compiled using a different compiler.
+Inline-Execute-PE was designed around x64 Beacons and x64 Windows C or C++ executables compiled using Mingw or Visual Studio.  This project does not support x86 executables or x64 executables written in a different language or compiled using a different compiler.
+
+![](Inline-Execute-PE.gif)
 
 ## Setup
 Clone the repository and optionally run make in order to recompile the BOF's.
@@ -33,7 +35,7 @@ Internal data-structure:
 3. pebroadcast
 
 ### peload
-peload is the beginning of Inline-Execute-PE. This command is used to load a PE into Beacon memory. It peforms the following major actions:  
+peload is the beginning of Inline-Execute-PE. This command is used to load a PE into Beacon memory. It performs the following major actions:  
 
 1. Sends the specified PE over the network to Beacon
 2. Creates a structure in Beacon memory to hold various pointers and handles required by Inline-Execute-PE throughout it's lifecycle
@@ -73,7 +75,7 @@ Each CobaltStrike Client has their own petable; Inline-Execute-PE goes to great 
 ### peconfig
 peconfig is used to configure options pertaining to how Inline-Execute-PE functions.  The two current options that may be altered are:
 
-1. Timeout. This dictates how long perun will wait for the PE to complete execution before terminating it. This exists as a safeguard in the event that incorrect arguments are given to a PE that cause it to never return/finish execution. This setting is 60 seconds by default but may be modified to accomodate longer-running PE's.
+1. Timeout. This dictates how long perun will wait for the PE to complete execution before terminating it. This exists as a safeguard in the event that incorrect arguments are given to a PE that cause it to never return/finish execution. This setting is 60 seconds by default but may be modified to accommodate longer-running PE's.
 2. UnloadLibraries. This option controls whether peunload will try to free DLL's from the Beacon process that were loaded by the PE. This is set to TRUE by default. Some PE's cause issues when DLL's are unloaded from the Beacon process and can cause Beacon to crash, in which case it is better to leave all DLL's loaded by the PE in the Beacon process.  This has been observed when using powershell.exe (perhaps due to it loading the .Net CLR into the Beacon process).
 
 ### pebroadcast
@@ -103,7 +105,7 @@ A different PE now may be loaded into the Beacon
 ### perun timeout
 You must be careful about the command line arguments you pass to the PE; some PE's will crash outright if given wrong arguments, while others will run endlessly causing Beacon to never call back even though the process is still running.
 
-This can be seen with mimikatz.exe when 'exit' isn't specified at the end of the list of arguments  
+This can be seen with Mimikatz.exe when 'exit' isn't specified at the end of the list of arguments  
 ![image](https://user-images.githubusercontent.com/91164728/213905249-b8145be1-7ddd-4576-91e3-294e60e26a80.png)
 
 ...
@@ -124,7 +126,8 @@ The below are in no particular order some observations made during testing and d
 3. Mimikatz.exe will crash Beacon if it was loaded, used, unloaded, and then loaded again IF UnloadLibraries was TRUE during the first peunload. 
 4. Some PE's are programmed to print their help menu's when the PE exits; these won't be displayed because calls to ExitProcess and exit() and the like are hooked and redirected to ExitThread so that the PE doesn't cause our Beacon process to exit.
 5. Some PE's aren't very good about freeing memory when they are done with it and rely on that memory being freed when the process exits; because the PE is running inside the Beacon process (and thus the process doesn't exit when PE is done), Beacon can tend to bloat as more PE's are loaded and ran inside of it.  Observe this during testing using something like Process Explorer and be mindful of it during operations.
-6. Sysinternal's Psexec doesn't seem to work; while it does run, it complains about the handle to the remote machine being invalid. In practice if one were to want to use something like psexec, it would probably be better achieved using CobaltStrike's socks proxy and an attack-box version of psexec anyways.
+6. Sysinternal's Psexec doesn't seem to work; while it does run, it complains about the handle to the remote machine being invalid. In practice if one were to want to use something like psexec, it would probably be better achieved using CobaltStrike's socks proxy and an attack-box version of psexec anyways.  
+7. Spawning a new beacon to use with Inline-Execute-PE probably isn't a bad idea, especially as you are getting a feel for how different PE's interact and function within the framework. Two is one, one is none.
 
 ## IOC's and AV/EDR
 IOC's associated with Inline-Execute-PE include but are not limited to:
@@ -133,16 +136,16 @@ IOC's associated with Inline-Execute-PE include but are not limited to:
 2. Changing memory protections on allocated memory between RW and RWX
 3. Creating a child conhost.exe process
 4. Loading DLL's required by the mapped PE
-5. Any actions performed by the actual PE; for instance, mimikatz touching LSASS 
+5. Any actions performed by the actual PE; for instance, Mimikatz touching LSASS 
 
 ### AV/EDR
 I did not give this a full-battery test against an EDR during development, partly due to laziness and partly due to lack of availability of a test environment. It was however tested against latest patch Windows Defender (which is in my experience a pretty good AV product).
 
-Mimikatz.exe is probably the most suspicious and well-known PE that comes to mind as a candidate for use with Inline-Execute-PE.  I found that Windows Defender ability to detect mimikatz running using Inline-Execute-PE was contingent on the process that Beacon was running in.  
+Mimikatz.exe is probably the most suspicious and well-known PE that comes to mind as a candidate for use with Inline-Execute-PE.  I found that Windows Defender ability to detect Mimikatz running using Inline-Execute-PE was contingent on the process that Beacon was running in.  
 
-A beacon running in a standalone executable (think beacon.exe with artifact kit so that it is able to execute and run normally past Defender) will be caught when using mimikatz.exe with Inline-Execute-PE.
+A beacon running in a standalone executable (think beacon.exe with artifact kit so that it is able to execute and run normally past Defender) will be caught when using Mimikatz.exe with Inline-Execute-PE.
 
-A beacon running in a Windows process (injected into Explorer.exe, notepad.exe, etc or  DLL sideloaded into a legitimate process) will NOT be caught when using mimikatz.exe with Inline-Execute-PE.
+A beacon running in a Windows process (injected into Explorer.exe, notepad.exe, etc or  DLL sideloaded into a legitimate process) will NOT be caught when using Mimikatz.exe with Inline-Execute-PE.
 
 In regards to EDR's that perform userland hooking, as I said I haven't tested but I have the following general thoughts:
 
@@ -156,7 +159,7 @@ At the outset, Inline-Execute-PE was envisioned as an all-in-one BOF, responsibl
 This discovery was welcome in one regard and disappointing in another; it was phenomenal to have a mature project from which to draw inspiration and help me over some sticking points in my code, but disheartening in that I had effectively been reinventing the wheel without knowing it. After reading up on Pezor and thinking about its design, some tradecraft related matters, and the operational needs of my organization I altered the course of Inline-Execute-PE to what you see today. This decision was driven by several factors which will be discussed below, as will some of the more curious design choices made that may have raised some eyebrows for those who have read this far.
 
 ### Inline-Execute-PE vs Pezor
-The key distinguishing difference between my project and Pezor is that should one want to run a PE multiple times in Beacon, Pezor requires that the PE be transmitted to Beacon, memory allocated and written to, and a conhost.exe spawned each and every time. In examining my operational experience I came up with multiple instances and tools where I needed to run the tool repeatedly; with Pezor, an Operator is repeatedly creating a conhost.exe, allocating new memory in Beacon, etc. which struck me as potentially undesirable when considering AV/EDR. This line of thinking led to the idea to 'load' a PE into Beacon, similarly to how you can load a .PS1 into Beacon for repeated use. The conhost.exe is created when the PE is first loaded and persists while the PE is loaded in memory; similarly, new memory is allocated for the PE once when it is first loaded, and of course you avoid needing to send the PE over the network each time you want to use it. The model that Inline-Execute-PE adopted isn't without it's faults, which I tried to address with varying degress of success.
+The key distinguishing difference between my project and Pezor is that should one want to run a PE multiple times in Beacon, Pezor requires that the PE be transmitted to Beacon, memory allocated and written to, and a conhost.exe spawned each and every time. In examining my operational experience I came up with multiple instances and tools where I needed to run the tool repeatedly; with Pezor, an Operator is repeatedly creating a conhost.exe, allocating new memory in Beacon, etc. which struck me as potentially undesirable when considering AV/EDR. This line of thinking led to the idea to 'load' a PE into Beacon, similarly to how you can load a .PS1 into Beacon for repeated use. The conhost.exe is created when the PE is first loaded and persists while the PE is loaded in memory; similarly, new memory is allocated for the PE once when it is first loaded, and of course you avoid needing to send the PE over the network each time you want to use it. The model that Inline-Execute-PE adopted isn't without it's faults, which I tried to address with varying degrees of success.
 
 ### Two Copies of PE
 A design choice that should jump out at people is the fact that Inline-Execute-PE maps the PE TWICE in Beacon. This certainly isn't desirable or a choice I made willingly, but was born of necessity. As previously mentioned, Inline-Execute-PE must hook several functions relating to command line arguments in the PE. Because the mapped PE runs inside of the Beacon process, the PE will attempt to use the command line arguments specified in the PROCESS_PARAMETERS section of the PEB; to get around this, when the PE calls one of the various functions that retrieves the command line arguments we must direct the PE to our own custom defined functions where we can provide the intended arguments as passed from CobaltStrike using perun. 
@@ -166,11 +169,11 @@ This works well, but during development I noticed something strange with several
 In order to be able to "reset" the PE to a state where it would actually call the hooked functions in order to fetch arguments, I resorted to making a second copy of the PE in memory during peload.  This copy is also XOR encrypted and sits with RX protections during the entirety of the lifecycle of Inline-Execute-PE, simply being used to overwrite the copy of the PE that is actually executed using perun.  As mentioned, it's not a perfect solution, but it is a blanket solution that covers all PE's without needing to get lost in the weeds trying to come up with a solution for all of the different PE's out there and the different API's they use.
 
 ### Conhost.exe
-With one of the major selling points of Inline-Execute-PE being that you can run tools without creating new processes, it is a big punch to the gut that I have to... create a new process (conhost.exe) in order to do so. This requirement comes from the fact that the standard streams (stdin/stdout/stderr) are not initialized in Windows programs unless a console is present.  In our case we don't need the console at all; the standard streams are redirected to an anonymous pipe and caputured that way, but without the conhost the streams are not initialized and cannot be redirected.
+With one of the major selling points of Inline-Execute-PE being that you can run tools without creating new processes, it is a big punch to the gut that I have to... create a new process (conhost.exe) in order to do so. This requirement comes from the fact that the standard streams (stdin/stdout/stderr) are not initialized in Windows programs unless a console is present.  In our case we don't need the console at all; the standard streams are redirected to an anonymous pipe and captured that way, but without the conhost the streams are not initialized and cannot be redirected.
 
 Inline-Execute-PE approaches the conhost problem in the same fashion that Pezor does, it calls AllocConsole and then immediately after hides it from view using ShowWindow. On a Windows 11 VM with 8 GB of RAM I don't ever see the console window flash and then disappear, but mileage will vary on that one depending on the target system.
 
-I spoke with a developer that works on a very advanced Commercial C2 that recently came out with a native equivalent (ok, much more advanced version) of Inline-Execute-PE who told me that they were able to avoid spawning a conhost.exe by "fooling Windows into thinking it had a console".  With this tidbit I spent about a week scouring the internet for documentation on how Windows programs interact with conhost, trying to examine the api calls associated with write functions and the console, and even examining the [Windows Terminal](https://github.com/microsoft/terminal) source code which is surprisingly enough available on Github. While I learned a lot about the PEB and standard stream-related things, I came out the other side of this empty handed.  I suspect the path forward might involve patching certain console-related functions in kernel32 but honestly don't know.  This is something I'm honestly pretty disappoined that I wasn't able to figure out, but being self-taught and only a few years into my career it is probably to be expected.
+I spoke with a developer that works on a very advanced Commercial C2 that recently came out with a native equivalent (ok, much more advanced version) of Inline-Execute-PE who told me that they were able to avoid spawning a conhost.exe by "fooling Windows into thinking it had a console".  With this tidbit I spent about a week scouring the internet for documentation on how Windows programs interact with conhost, trying to examine the API calls associated with write functions and the console, and even examining the [Windows Terminal](https://github.com/microsoft/terminal) source code which is surprisingly enough available on Github. While I learned a lot about the PEB and standard stream-related things, I came out the other side of this empty handed.  I suspect the path forward might involve patching certain console-related functions in kernel32 but honestly don't know.  This is something I'm honestly pretty disappointed that I wasn't able to figure out, but being self-taught and only a few years into my career it is probably to be expected.
 
 ### PE Timeout and Rescue
 All those who have ever tried to write a BOF are aware that for all of the advantages that come with them, a huge danger lies in the fact that an error or crash in your BOF can and will kill your Beacon. The danger is amplified in this project by the nature of how much control users have on data passed to Inline-Execute-PE and how few safety measures can easily or reliably be put in place by me, the developer. Users could for example crash their Beacon by loading an x86 PE into an x64 Beacon, or far more commonly by passing improper arguments to the mapped PE as I touched on earlier. While I can't stop users from crashing their Beacons with bad arguments to their PE's, I can try and rescue their Beacon in the case of an endlessly running PE, as in the case of Mimikatz when 'exit' isn't specified.
@@ -180,6 +183,23 @@ Ideally I would be able to stop execution of the PE, allowing Beacon to resume n
 To terminate a PE that continues to run past the 'timeout' option, TerminateThread is called on the handle returned from CreateThread. This doesn't allow the thread to gracefully exit anything, so it makes sense that some things might break.  I tried to mitigate this by implementing [thread hijacking](https://www.ired.team/offensive-security/code-injection-process-injection/injecting-to-remote-process-via-thread-hijacking), with the goal being to suspend the PE thread and redirect it's execution to the ExitThread() API. The hope here was that if it were the thread that started exit procedures (as opposed to being forcefully terminated externally), it might result in stdout/stderr continuing to function but I ended up having the same issue (as well as experiencing an inability to suspend the PE thread in the case of Mimikatz).
 
 Unable to mitigate this problem, I landed on simply preventing users from being able to continue to run the PE or load additional PE's into the affected Beacon (which WOULD result in a crash). This is another instance of Inline-Execute-PE falling short of where I would like it to be, but I settled for the fact that the Operator would at least still have their Beacon and be able to use it for normal functionality. 
+
+### Inline-Execute-PE Data Structure
+A challenging part of this project was ensuring the availability of PE's loaded into Beacons to all CobaltStrike Clients connected to the Team Server. Inline-Execute-PE's data is stored in structures created by Inline-Execute-PE.cna, which must be loaded into each Client that wishes to use the tool; as a result, these data structures live within each client, not on the Team Server. If this data did live in a single central location (TS) it would be trivial to retrieve it from each Client and this whole thing would be a non-issue; were the CobaltStrike Team to formally integrate a capability like Inline-Execute-PE into CobaltStrike I am positive this is the direction they would go. But being this is a community add-on, we make do with what we have.
+
+There are a couple different scenarios we have to worry about when it comes to ensuring that each CobaltStrike Client has the latest, accurate data concerning PE's loaded into Beacons:
+
+1. New Clients connecting to the TS and needing the current petable
+2. Instances where only a single Client is connected to the TS and restarts CobaltStrike (thus losing the petable stored in the Client memory)
+3. Client A making a change to Inline-Execute-PE data which must be communicated to Client B
+
+A multi-pronged approach was taken to address these scenarios. To handle the case where only a single CobaltStrike Client is connected to the TS (and thus is the only entity that has the petable data), each time the Client alters the petable (peload, peconfig, peunload, etc) it also writes the contents of it's petable out to a local text file located in the CobaltStrike directory.  Should the Client exit/restart, or when Inline-Execute-PE.cna is reloaded, it will first attempt to read from the local petable.txt file in order to populate it's in-memory petable.
+
+When multiple Clients are connected to a TS and a new Client joins (as per the Event Log), each Client fetches a list of all users connected to the TS and sorts it alphabetically.  The Client that is first on that list is selected as the "Broadcast" Client, and after waiting 5 seconds (to allow the new Client to initialize and read it's local petable.txt) will send messages (Actions) in the Event Log for each entry in it's petable. All clients (aside from the Broadcasting one) will read these messages and update their petables with the broadcast information; this includes updating existing entries as well as adding any additional ones that their respective petables do not contain.
+
+Normal operations involving Inline-Execute-PE also rely on sending messages in the Event Log.  When Client A runs peload, a message is broadcast containing all of the pertinent petable information; ALL clients update their respective petables by parsing these broadcasted Event Log messages using the "on Event_Action" hook. Changes are also made to Inline-Execute-PE data when peload and peunload finish executing their BOF's; these changes are communicated back by Beacon (e.g. after running peload Beacon calls back with the memory location of the pMemAddrs struct) and as such are visible to all connected Clients, which update their respective petables using the "on Beacon_Output" hook. 
+
+These separate efforts combined result in Inline-Execute-PE being able to efficiently and reliably synchronize critical data between multiple clients.
 
 ## Credits
 This project would not have been possible without the following projects and resources which were referenced heavily and from which core parts of this project originated. Big thanks to the author's for their code and their vision.
