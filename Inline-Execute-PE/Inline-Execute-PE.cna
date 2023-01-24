@@ -611,13 +611,13 @@ beacon_command_register(
 Command: perun
 Summary: This command will run a BOF to execute an unmanaged PE that was previously loaded using the peload command.
          Provide any command line arguments to the PE immediately following perun.
-         Any double quotes (\") in the command line arguments must be escaped using the backslash (\) character.
+         Any double quotes (\") in the command line arguments must be escaped using the backslash (\\) character.
 
 Usage:   perun <arg> <arg> <arg> ...
          <arg>        An argument to the loaded PE.  Do not specify the name of the executable, this is covered by the \"fillerarg\" variable in the aggressor script.
 
          Example: perun privilege::debug token::elevate exit                <- This example when mimikatz.exe was loaded using peload
-         Example: perun * -filter \"(objectclass=user)\" -attr * -Limit 1     <- This example when dsquery.exe was loaded using peload. Notice backslash to escape double quotes.
+         Example: perun * -filter \\\"(objectclass=user)\\\" -attr * -Limit 1     <- This example when dsquery.exe was loaded using peload. Notice backslash to escape double quotes.
          Example: perun /c cd                                               <- This example when cmd.exe was loaded using peload.
          Example: perun -acceptula -p explorer.exe                          <- This example when handle64.exe (sysinternals) was loaded using peload.
          Example: perun Get-MpPreference                                    <- This example when powershell.exe was loaded using peload.
