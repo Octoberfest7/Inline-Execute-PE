@@ -37,13 +37,13 @@ Internal data-structure:
 ### peload
 peload is the beginning of Inline-Execute-PE. This command is used to load a PE into Beacon memory. It performs the following major actions:  
 
-1. Sends the specified PE over the network to Beacon
-2. Creates a structure in Beacon memory to hold various pointers and handles required by Inline-Execute-PE throughout it's lifecycle
-3. Allocates memory in Beacon and writes PE to it with RW protection
-4. XOR encrypts PE in memory using a user-specified key
-5. Allocates another chunk of memory and copies the XOR encrypted PE to it. This is necessary in order to be able to "revert" the PE for subsequent executions
-6. Spawns a conhost.exe child process under Beacon in order to initialize stdin/stdout/stderr
-7. Redirects stdout and stderr to an anonymous pipe so that PE output may be captured
+1. Sends the specified PE over the network to Beacon OR sends the name of the PE to read from disk on the target machine  
+2. Creates a structure in Beacon memory to hold various pointers and handles required by Inline-Execute-PE throughout it's lifecycle  
+3. Allocates memory in Beacon and writes PE to it with RW protection  
+4. XOR encrypts PE in memory using a user-specified key  
+5. Allocates another chunk of memory and copies the XOR encrypted PE to it. This is necessary in order to be able to "revert" the PE for subsequent executions  
+6. Spawns a conhost.exe child process under Beacon in order to initialize stdin/stdout/stderr  
+7. Redirects stdout and stderr to an anonymous pipe so that PE output may be captured  
 
 ### perun
 perun is the second step in Inline-Execute-PE. It performs the following major actions:  
@@ -87,6 +87,9 @@ Every other CobaltStrike Client will update their petable with the data broadcas
 Use peload to load a PE into Beacon memory  
 ![image](https://user-images.githubusercontent.com/91164728/213904908-89d1be5b-6ed3-4fee-a572-afd46c44098e.png)
 
+Alternatively, if there is a PE on the target machine you would like to use without creating a new process, provide the path and the --local switch  
+![image](https://user-images.githubusercontent.com/91164728/221037390-d0b9714e-dffc-46f8-88e0-88850cc29073.png)
+
 Call perun, passing any arguments to the loaded PE  
 ![image](https://user-images.githubusercontent.com/91164728/213904931-77523b46-7f29-417f-8392-61f80e7d0a4a.png)
 
@@ -128,6 +131,7 @@ The below are in no particular order some observations made during testing and d
 5. Some PE's aren't very good about freeing memory when they are done with it and rely on that memory being freed when the process exits; because the PE is running inside the Beacon process (and thus the process doesn't exit when PE is done), Beacon can tend to bloat as more PE's are loaded and ran inside of it.  Observe this during testing using something like Process Explorer and be mindful of it during operations.
 6. Sysinternal's Psexec doesn't seem to work; while it does run, it complains about the handle to the remote machine being invalid. In practice if one were to want to use something like psexec, it would probably be better achieved using CobaltStrike's socks proxy and an attack-box version of psexec anyways.  
 7. Spawning a new beacon to use with Inline-Execute-PE probably isn't a bad idea, especially as you are getting a feel for how different PE's interact and function within the framework. Two is one, one is none.
+8. If there is a LOLBIN you want to use without the telemetry of creating a new process, use the --local switch with peload and read it from disk on the target system. This can also be useful to avoid versioning issues.
 
 ## IOC's and AV/EDR
 IOC's associated with Inline-Execute-PE include but are not limited to:
