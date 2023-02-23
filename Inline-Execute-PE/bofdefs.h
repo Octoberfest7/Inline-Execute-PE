@@ -87,6 +87,7 @@ WINBASEAPI DWORD WINAPI KERNEL32$ResumeThread(HANDLE hThread);
 WINBASEAPI DWORD WINAPI KERNEL32$GetThreadId(HANDLE hThread);
 WINBASEAPI HANDLE WINAPI KERNEL32$OpenThread(DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwThreadId);
 WINBASEAPI DWORD WINAPI KERNEL32$GetModuleFileNameA(HANDLE hModule, LPSTR lpFilename, DWORD nSize);
+WINBASEAPI BOOL WINAPI KERNEL32$GetFileSizeEx(HANDLE hFile, PLARGE_INTEGER lpFileSize);
 
 //PSAPI
 WINBASEAPI BOOL WINAPI PSAPI$EnumProcessModules(HANDLE HProcess, HMODULE *lphModule, DWORD cb, LPDWORD lpcbNeeded);
@@ -182,6 +183,7 @@ WINBASEAPI NTSTATUS NTAPI NTDLL$NtQueryInformationProcess(HANDLE, PROCESSINFOCLA
 #define GetThreadId 				KERNEL32$GetThreadId
 #define OpenThread 					KERNEL32$OpenThread
 #define GetModuleFileNameA 			KERNEL32$GetModuleFileNameA
+#define GetFileSizeEx 				KERNEL32$GetFileSizeEx
 
 //PSAPI
 #define EnumProcessModules 			PSAPI$EnumProcessModules

