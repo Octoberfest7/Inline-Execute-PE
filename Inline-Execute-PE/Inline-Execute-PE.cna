@@ -668,7 +668,8 @@ alias peunload
         exit();
     }
 
-    if(!-isactive $bid || binfo($bid, "last") >= (binfo($bid, "sleep")[0] * 1000 * 3))
+    #if beacon is inactive OR beacon isn't interactive & hasn't called back in 3x sleeptime OR beacon is interactive and hasn't called back in 15 seconds
+    if(!-isactive $bid || (binfo($bid, "sleep")[0] > 0 && binfo($bid, "last") >= binfo($bid, "sleep")[0] * 1000 * 3) || (binfo($bid, "sleep")[0] == 0 && binfo($bid, "last") >= 15000))
     {
         berror($1, "Cannot unload PE from a Beacon that is not alive or has not called back within 3x the set sleep time!");
         exit();
@@ -761,7 +762,8 @@ alias peconfig
 
     $bid = $1;
 
-    if(!-isactive $bid || binfo($bid, "last") >= (binfo($bid, "sleep")[0] * 1000 * 3))
+    #if beacon is inactive OR beacon isn't interactive & hasn't called back in 3x sleeptime OR beacon is interactive and hasn't called back in 15 seconds
+    if(!-isactive $bid || (binfo($bid, "sleep")[0] > 0 && binfo($bid, "last") >= binfo($bid, "sleep")[0] * 1000 * 3) || (binfo($bid, "sleep")[0] == 0 && binfo($bid, "last") >= 15000))
     {
         berror($1, "Cannot update settings for a Beacon that is not alive or has not called back within 3x the set sleep time!");
         exit();
